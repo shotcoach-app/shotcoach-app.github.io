@@ -109,6 +109,7 @@ button:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
       <button class="tool" type="button" id="tPeak" aria-pressed="false">ピント表示</button>
       <button class="tool" type="button" id="tRef" aria-pressed="false">お手本を選ぶ</button>
       <button class="tool" type="button" id="tGhost" aria-pressed="false" hidden>重ねるON/OFF</button>
+      <button class="tool" type="button" id="tQuiet" aria-pressed="false">控えめ撮影</button>
       <button class="tool" type="button" id="tAuto" aria-pressed="false">オート撮影</button>
       <button class="tool" type="button" id="tTorch" aria-pressed="false" hidden>ライト</button>
       <input type="file" id="refFile" accept="image/*" hidden>
@@ -297,7 +298,12 @@ let gen=GEN[0], fmt=FMT[1], facing='environment', stream=null;
 function chips(el,list,get,set){el.innerHTML='';list.forEach(x=>{const b=document.createElement('button');b.type='button';b.className='pill';b.textContent=x.n;
   b.setAttribute('aria-pressed',get()===x);b.onclick=()=>{set(x);[...el.children].forEach((c,i)=>c.setAttribute('aria-pressed',list[i]===x));if(el===$('#genres'))showHint();};el.appendChild(b);});}
 chips($('#genres'),GEN,()=>gen,x=>{gen=x;dish=null;$('#dish').value='';});chips($('#fmts'),FMT,()=>fmt,x=>fmt=x);
-const showHint=()=>$('#hint').textContent=dish?`【${dish.n}】${hintText(dish)}`:gen.hint; showHint();
+const QUIET_KEY='shotcoach.quiet';
+let quietOn=false;try{quietOn=localStorage.getItem(QUIET_KEY)==='1';}catch(e){}
+const QUIET_TIP='控えめ撮影: 座ったまま、トレーや皿を手前に引き寄せ、スマホを胸の高さで少し前に出して斜め上(約60°)から。全部入らない時は0.5倍に。このアプリのシャッターは音が鳴りません。';
+const targetP=d=>(quietOn&&d.p>=75)?60:d.p;
+const isFlat=u=>dish?(targetP(dish)>=75&&u.z>.85):u.z>.94;
+const showHint=()=>$('#hint').textContent=dish?`【${dish.n}】${(quietOn&&dish.p>=75)?QUIET_TIP:hintText(dish)}`:gen.hint; showHint();
 const UNREG_KEY='shotcoach.unreg';
 function unregList(){try{return JSON.parse(localStorage.getItem(UNREG_KEY)||'[]')}catch(e){return[]}}
 function unregAdd(q){try{const l=unregList();if(!l.includes(q)){l.push(q);localStorage.setItem(UNREG_KEY,JSON.stringify(l.slice(-60)));}}catch(e){}}
@@ -309,7 +315,7 @@ async function unregCopy(btn){
 }
 function applyDish(d,label,note){
   dish=d;const base=GEN[d.g??0];gen={...base,n:d.n,t:d.t,shots:d.shots};sig='';
-  $('#hint').textContent=`【${label}】${note||hintText(d)}`;
+  $('#hint').textContent=`【${label}】${note||((quietOn&&d.p>=75)?QUIET_TIP:hintText(d))}`;
   [...$('#genres').children].forEach((c,i)=>c.setAttribute('aria-pressed',GEN[i]===base));$('#cats').hidden=true;
 }
 $('#dishForm').onsubmit=e=>{
@@ -444,6 +450,9 @@ function buildMask(v,s){
   mctx.putImageData(out,0,0);mkReady=true;
 }
 function toggleTool(id,key){const b=$(id);b.onclick=()=>{T[key]=!T[key];b.setAttribute('aria-pressed',T[key]);if(!T.zebra&&!T.peak)mkReady=false;sig='';};}
+/* quiet mode: in a restaurant, shoot overhead dishes seated from a high angle instead of standing up */
+$('#tQuiet').setAttribute('aria-pressed',quietOn);
+$('#tQuiet').onclick=()=>{quietOn=!quietOn;$('#tQuiet').setAttribute('aria-pressed',quietOn);try{localStorage.setItem(QUIET_KEY,quietOn?'1':'0');}catch(e){}sig='';showHint();};
 toggleTool('#tZebra','zebra');toggleTool('#tPeak','peak');toggleTool('#tAuto','auto');toggleTool('#tGhost','ghost');
 function setGhost(src){const im=new Image();im.onload=()=>{ghostImg=im;T.ghost=true;const g=$('#tGhost');g.hidden=false;g.setAttribute('aria-pressed','true');};im.src=src;}
 $('#tRef').onclick=()=>$('#refFile').click();
@@ -484,7 +493,7 @@ function evaluate(){
   const M=[];const add=(l,t)=>M.push({l,t});
   // level
   if(up){
-    if(up.z>.85){ // flat / top-down (camera facing the table)
+    if(isFlat(up)){ // flat / top-down (camera facing the table)
       const tilt=Math.asin(Math.min(1,Math.hypot(up.x,up.y)))*180/Math.PI;
       if(tilt<2)add('ok','真上で水平です');
       else{const h=Math.abs(up.x)>Math.abs(up.y)?(up.x>0?'右':'左'):(up.y>0?'上':'下');add(tilt<5?'warn':'bad',`${h}側が高い(${tilt.toFixed(0)}°)。平らにしてください`);}
@@ -497,10 +506,10 @@ function evaluate(){
     }
   }
   if(up&&dish){
-    const pitch=Math.asin(Math.max(-1,Math.min(1,up.z)))*180/Math.PI, diff=pitch-dish.p;
+    const tp=targetP(dish),pitch=Math.asin(Math.max(-1,Math.min(1,up.z)))*180/Math.PI, diff=pitch-tp;
     const fa=a=>a<0?`上向き${Math.round(-a)}°`:a>=1?`下向き${Math.round(a)}°`:'水平';
-    if(Math.abs(diff)<=7)add('ok',`${dish.n}の角度OK(いま${fa(pitch)} / 目標${fa(dish.p)})`);
-    else add(Math.abs(diff)<=15?'warn':'bad',`カメラをあと約${Math.abs(diff).toFixed(0)}°${diff>0?'上':'下'}に向けて(目標${fa(dish.p)})`);
+    if(Math.abs(diff)<=7)add('ok',`${dish.n}の角度OK(いま${fa(pitch)} / 目標${fa(tp)})`);
+    else add(Math.abs(diff)<=15?'warn':'bad',`カメラをあと約${Math.abs(diff).toFixed(0)}°${diff>0?'上':'下'}に向けて(目標${fa(tp)})`);
   }
   if(A.ok){
     // light
@@ -581,7 +590,7 @@ function drawFrame(){
     if(A.target){ox.setLineDash([5,5]);ox.lineWidth=2;ox.beginPath();ox.moveTo(c.x+c.w*A.subj.x,c.y+c.h*A.subj.y);ox.lineTo(c.x+c.w*A.target[0],c.y+c.h*A.target[1]);ox.stroke();ox.setLineDash([]);}}
   // level
   if(up){const cx=innerWidth/2,cy=innerHeight/2;
-    if(up.z>.85){const tilt=Math.hypot(up.x,up.y),good=tilt<.035;
+    if(isFlat(up)){const tilt=Math.hypot(up.x,up.y),good=tilt<.035;
       ox.strokeStyle=good?'#3ddc97':'#fff';ox.lineWidth=3;ox.beginPath();ox.arc(cx,cy,46,0,7);ox.stroke();
       ox.beginPath();ox.moveTo(cx-10,cy);ox.lineTo(cx+10,cy);ox.moveTo(cx,cy-10);ox.lineTo(cx,cy+10);ox.stroke();
       ox.fillStyle=good?'#3ddc97':'#ffd23f';ox.beginPath();ox.arc(cx+up.x*46/.3,cy-up.y*46/.3,10,0,7);ox.fill();
